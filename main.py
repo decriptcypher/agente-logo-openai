@@ -1,9 +1,11 @@
 from openai import OpenAI
 import base64
-from dotenv import load_dotenv
 import os
-import json
-from datetime import datetime
+from dotenv import load_dotenv
+
+from agents.application_agent import gerar_aplicacoes
+from agents.social_agent import gerar_posts
+from agents.packaging_agent import gerar_embalagens
 
 # ----------------------------
 # Configuração
@@ -11,12 +13,12 @@ from datetime import datetime
 load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
+
 # ----------------------------
 # Agente de Branding
 # ----------------------------
-def brand_agent(ideia, publico, tom, nome_existente, feedback=""):
-    nome_instrucao = ""
-    if nome_existente.strip() != "":
+def gerar_branding(ideia, publico, tom, nome_existente="", feedback=""):
+    if nome_existente.strip():
         nome_instrucao = f"O nome da marca deve ser: {nome_existente} (não altere)."
     else:
         nome_instrucao = "Crie um nome para a marca."
@@ -32,16 +34,14 @@ Tom: {tom}
 
 {nome_instrucao}
 
-Feedback do usuário (se houver):
+Feedback do usuário:
 {feedback}
 
 Gere:
 - Nome da marca
 - Slogan curto
 - Paleta de cores (3 a 4 cores com nome e HEX)
-- Tipografia recomendada (estilo de fonte)
-
-Responda de forma clara e objetiva.
+- Tipografia recomendada
 """
 
     response = client.responses.create(
@@ -49,13 +49,22 @@ Responda de forma clara e objetiva.
         input=prompt
     )
 
-    return response.output_text
+    branding_text = response.output_text
+
+    # nome padrão simples
+    nome_marca = "marca"
+    for linha in branding_text.split("\n"):
+        if "Nome" in linha:
+            nome_marca = linha.split(":")[-1].strip().replace(" ", "_")
+            break
+
+    return branding_text, nome_marca
 
 
 # ----------------------------
 # Agente de Logo
 # ----------------------------
-def logo_agent(branding_text, version_folder):
+def gerar_logos(branding_text):
     prompt_principal = f"""
 Crie o LOGO PRINCIPAL da marca com base neste branding:
 
@@ -81,9 +90,8 @@ REGRAS IMPORTANTES:
 - Deve ser visualmente diferente do logo principal
 - Pode ser:
   - símbolo isolado
-  - versão compacta
   - monograma
-  - variação horizontal
+  - versão compacta
 - Use SOMENTE as cores da paleta
 - Estilo flat
 - Fundo branco
@@ -98,8 +106,7 @@ REGRAS IMPORTANTES:
         size="1024x1024"
     )
 
-    main_path = f"{version_folder}/logo_principal.png"
-    with open(main_path, "wb") as f:
+    with open("logo_principal.png", "wb") as f:
         f.write(base64.b64decode(result_main.data[0].b64_json))
 
     # Logo secundário
@@ -109,84 +116,49 @@ REGRAS IMPORTANTES:
         size="1024x1024"
     )
 
-    secondary_path = f"{version_folder}/logo_secundario.png"
-    with open(secondary_path, "wb") as f:
+    with open("logo_secundario.png", "wb") as f:
         f.write(base64.b64decode(result_secondary.data[0].b64_json))
 
-    return [main_path, secondary_path]
-
 
 # ----------------------------
-# Briefing inicial
+# Kit de mídia
 # ----------------------------
-print("=== Briefing de Marca ===")
-ideia = input("Qual é a ideia geral do negócio? ")
-publico = input("Quem é o público-alvo? ")
-tom = input("Qual o tom de voz da marca? ")
-nome_existente = input("A marca já tem nome? (deixe vazio se não) ")
+def gerar_kit_midia(branding, nome_marca):
+    import base64
 
-# criar pasta do projeto
-timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-project_folder = f"projeto_{timestamp}"
-os.makedirs(project_folder, exist_ok=True)
+    imagens = []
 
-approved = False
-feedback = ""
-version = 1
+    prompt_base = f"""
+Crie uma imagem publicitária para esta marca:
 
-# ----------------------------
-# Loop de aprovação
-# ----------------------------
-while not approved:
-    version_folder = f"{project_folder}/versao_{version}"
-    os.makedirs(version_folder, exist_ok=True)
+{branding}
 
-    print(f"\n=== Gerando versão {version} ===")
+REGRAS IMPORTANTES:
+- Use SOMENTE as cores da paleta
+- Respeite o estilo tipográfico
+- Visual consistente com o logo
+- Estilo profissional
+- Fundo limpo
+"""
 
-    # Brand agent
-    branding = brand_agent(ideia, publico, tom, nome_existente, feedback)
+    prompts = [
+        "Cartão de visita minimalista",
+        "Brinde promocional com a marca",
+        "Aplicação da marca em material corporativo",
+        "Post de Instagram promocional",
+        "Post de Instagram institucional",
+        "Embalagem do produto",
+        "Embalagem em perspectiva estilo propaganda"
+    ]
 
-    print("\n=== Identidade de Marca ===\n")
-    print(branding)
+    for p in prompts:
+        result = client.images.generate(
+            model="gpt-image-1",
+            prompt=prompt_base + "\n\nCENA: " + p,
+            size="1024x1024"
+        )
 
-    # salvar branding
-    with open(f"{version_folder}/branding.txt", "w") as f:
-        f.write(branding)
+        img = base64.b64decode(result.data[0].b64_json)
+        imagens.append((p, img))
 
-    # Logo agent
-    print("\nGerando logos...")
-    logos = logo_agent(branding, version_folder)
-
-    print("\nLogos gerados:")
-    for path in logos:
-        print(path)
-
-    # Perguntar ao usuário
-    print("\nDeseja aprovar ou refazer?")
-    print("Digite: aprovar")
-    print("ou: feedback: sua instrução")
-
-    user_input = input(">> ")
-
-    if user_input.lower() == "aprovar":
-        approved = True
-        print("\nMarca aprovada!")
-    elif user_input.lower().startswith("feedback:"):
-        feedback = user_input.split("feedback:", 1)[1].strip()
-        version += 1
-    else:
-        print("Entrada não reconhecida. Tente novamente.")
-
-# salvar resultado final
-final_data = {
-    "ideia": ideia,
-    "publico": publico,
-    "tom": tom,
-    "nome_fornecido": nome_existente,
-    "versao_aprovada": version
-}
-
-with open(f"{project_folder}/resultado_final.json", "w") as f:
-    json.dump(final_data, f, indent=2)
-
-print(f"\nProjeto salvo na pasta: {project_folder}")
+    return imagens
